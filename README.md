@@ -1,111 +1,94 @@
 # StreamCast
 
-StreamCast is an open-source Android app for sharing an Android phone screen with a Chromecast-compatible TV on the same Wi-Fi network.
+Aplicativo Android de código aberto para compartilhar a tela do celular com uma TV compatível com Chromecast na mesma rede Wi-Fi.
 
-## Why this project exists
+## Por que este projeto existe
 
-This project was created for a practical compatibility problem: a Xiaomi 13 Pro 5G did not recognize a TCL TV through the phone's usual screen-casting flow. StreamCast discovers the TV directly on the local network and sends the screen through Google Cast, with HLS as the compatibility-focused mode and WebRTC as an optional low-latency mode.
+O StreamCast foi criado para resolver uma necessidade prática: um Xiaomi 13 Pro 5G não reconhecia uma TV TCL pelo método padrão de transmissão de tela do celular. O aplicativo encontra a TV diretamente na rede local e envia a tela usando Google Cast.
 
-The app is especially useful when the phone's built-in cast panel cannot find a TCL, Google TV, or Chromecast-compatible receiver that is otherwise reachable on the same network.
+O projeto é útil quando o painel de transmissão integrado do Android não encontra uma TV TCL, Google TV ou outro receptor compatível com Chromecast.
 
-## Important limitations
+## Recursos
 
-- The phone and TV must be on the same Wi-Fi network; guest networks and AP isolation can prevent discovery.
-- HLS is the most compatible mode and typically has several seconds of latency.
-- WebRTC is experimental and depends on the TV's custom receiver and codec support. StreamCast uses a conservative 1080p30 H.264 profile for broader TCL/Chromecast compatibility.
-- This project is not affiliated with Xiaomi, TCL, Google, or Chromecast.
+- Descoberta automática de TVs e Chromecasts pela rede local.
+- Modo HLS, com maior compatibilidade e alguns segundos de atraso.
+- Modo WebRTC experimental, com baixa latência.
+- Captura de tela usando `MediaProjection` e codificação H.264.
+- Captura opcional do áudio reproduzido pelo celular.
+- Logs persistentes para diagnóstico de quedas e falhas de conexão.
+- Controle de volume pelos botões físicos do celular, inclusive em segundo plano.
+- Controle remoto opcional para Android TV e Google TV.
 
-## Screenshots
+## Como funciona
 
-<p>
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/01-cast-idle.png" width="240" alt="Main Cast screen with HLS/WebRTC/Remote mode toggle and discovered devices" />
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02-settings.png" width="240" alt="Settings: resolution, segment duration, playlist window, live-edge target" />
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02-settings-2.png" width="240" alt="Settings continued: sync alignment + audio capture options" />
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/03-webrtc-idle.png" width="240" alt="WebRTC mode — low-latency screen mirroring via a custom Cast receiver" />
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/04-remote-picker.png" width="240" alt="Remote mode — paired and discovered Android TV / Google TV devices" />
-</p>
+- **Descoberta:** o `NsdManager` encontra receptores Google Cast via mDNS (`_googlecast._tcp.local`).
+- **Canal de controle:** conexão TLS com a porta 8009 usando o protocolo Cast V2 implementado em Kotlin.
+- **Captura:** `MediaProjection` e `MediaCodec` capturam e codificam a tela em H.264.
+- **HLS:** um servidor HTTP Ktor integrado fornece o stream ao receptor padrão do Chromecast. A latência normalmente fica entre 5 e 10 segundos.
+- **WebRTC:** o aplicativo negocia uma conexão `RTCPeerConnection` com um receiver Cast personalizado para reduzir a latência.
 
-## How it works
+## Modo WebRTC
 
-- **Discovery**: `NsdManager` finds Chromecasts via mDNS (`_googlecast._tcp.local`).
-- **Control channel**: TLS socket to Chromecast port 8009, Cast V2 protocol implemented in pure Kotlin (connection / heartbeat / receiver / media namespaces).
-- **Capture**: Android `MediaProjection` + `MediaCodec` (H.264), optional audio via `AudioPlaybackCapture`.
-- **Transport**: HLS served from an embedded Ktor HTTP server on the phone. The server binds only to the Wi-Fi interface IP on a freshly-picked ephemeral port (not `0.0.0.0:8080`), so it isn't reachable over cellular or any other interface. The playlist lives under a path gated by a 128-bit random token (e.g. `http://<phone-ip>:<port>/c/<token>/stream.m3u8`); the token is generated fresh per cast session and is only valid while the foreground service is running. The Chromecast loads that URL through the Default Media Receiver (App ID `CC1AD845`). Expect ~5–10 s of latency.
-- **Multi-device casting**: Up to 4 Chromecasts can subscribe to the same HLS stream in parallel. Each has its own Cast V2 session, transport controls, and volume. The capture pipeline is started once on the first device and reused for the rest, so adding a second receiver doesn't retrigger the MediaProjection consent dialog.
-- **Sync across receivers**: HLS LIVE doesn't give receivers a shared clock, so by default each one picks its own live-edge and they drift. With **Sync start** enabled (Settings), the app coordinates a pause → seek → play handshake whenever a new device joins so every receiver lands on the same stream offset. A background loop then re-aligns every ~15 s: it polls `currentTime` on every session, pauses them all, seeks to the laggard's offset, and plays them back in parallel. This is best-effort — receiver-local offsets are only comparable while sessions stay connected.
+O WebRTC é opcional e experimental. Ele usa o receiver personalizado hospedado pelo projeto e o App ID padrão `9098830C`.
 
+Para melhorar a compatibilidade com TVs TCL e outros receptores Cast, o perfil padrão usa H.264 em 1080p30 e até 8 Mbps. Alguns dispositivos podem não renderizar corretamente 1080p60, mesmo quando a negociação WebRTC é concluída.
 
-## WebRTC mode (low-latency) — optional
+O receiver está em [`receiver/`](receiver/). Para hospedar uma versão própria, registre o endereço no [Google Cast Developer Console](https://cast.google.com/publish/) e informe o App ID no aplicativo.
 
-The default cast path is HLS over HTTP; latency is ~5–10 s. A separate **WebRTC** mode ships alongside it for sub-second latency. It's reachable from the overflow menu on the Cast screen.
+Limitações do WebRTC:
 
-WebRTC mode uses a **custom Cast receiver**. The app ships with a default App ID (`9098830C`) pointing at the project's hosted receiver, so it works out of the box. If you'd rather host your own receiver, register its URL at <https://cast.google.com/publish/> and paste the resulting 8-character App ID into the app's WebRTC screen. Static receiver page + instructions live in [`receiver/`](receiver/). When you start a cast the app launches the receiver, negotiates a `RTCPeerConnection` over the Cast channel, and streams the screen directly. No HLS server, no drift/sync coordination, no multi-device fan-out.
+- Um receptor por transmissão.
+- Não possui pausa, reprodução ou busca como um player de mídia comum.
+- Depende do suporte de codec e WebRTC da TV.
 
-Tradeoffs versus HLS mode:
+## Requisitos
 
-- One Chromecast per cast (no parallel receivers).
-- No pause/play/seek, no volume UI (WebRTC has no concept of media transport).
-- The WebRTC Android library is a pre-built open-source AAR from [webrtc-sdk/android](https://github.com/webrtc-sdk/android) (BSD-3). Adds ~18 MB of native code across 4 ABIs. Building it from Chromium source ourselves is listed as a future decision in `CLAUDE.md`.
+- Android 8.0 ou superior (API 26).
+- Celular e TV conectados à mesma rede Wi-Fi.
+- A rede não pode bloquear comunicação entre dispositivos, como algumas redes de convidados.
 
-## Remote control mode
+## Compilação
 
-Switch the segmented control at the top to **Remote** to use the app as a remote for an Android TV / Google TV — the same role the Google Home app plays. No proprietary dependencies; the polo pairing handshake and the Android TV Remote v2 control channel are implemented in pure Kotlin against schemas vendored from [tronikos/androidtvremote2](https://github.com/tronikos/androidtvremote2).
+O Gradle Wrapper está incluído no projeto. É necessário JDK 17 ou 21.
 
-- **Discovery**: `NsdManager` finds TVs via mDNS (`_androidtvremote2._tcp.local`) — independent of the Chromecast discovery used by the cast modes.
-- **Pairing (one-time)**: TLS connect to port 6467, then a 6-step polo handshake (request → options → configuration → ack → secret → ack). The TV displays a 6-digit hex code on screen; you type it into the dialog on the phone. The app generates a per-install RSA-2048 client cert (no BouncyCastle — hand-rolled X.509 v3 DER) and stores it under [androidx.security `EncryptedFile`](https://developer.android.com/topic/security/data) with a Keystore-derived AES-256-GCM master key. The TV's server cert SHA-256 is pinned in app-private SharedPreferences for subsequent connections.
-- **Control channel**: mTLS to port 6466 using the paired client cert + server pin. Sends `RemoteKeyInject` for D-pad / nav / media-transport keys, replies to the TV's keepalive `RemotePingRequest` from inside the read loop, and mirrors `RemoteSetVolumeLevel` pushes into a Compose `StateFlow` so the volume readout follows physical-remote presses live.
-- **Settings shortcut**: maps to long-press Home (which on Sony BRAVIA opens the Action Menu where Settings lives), since `KEYCODE_SETTINGS` itself goes unbound on Sony firmware.
-- **Re-pair after a TV factory reset**: tap **Forget** on the row in the Remote picker, then re-pair from scratch — the TV's new server cert is pinned on the new SECRET_ACK exchange.
-
-## Requirements
-
-- Android 8.0+ (API 26).
-- A Chromecast on the same Wi-Fi network.
-
-## Build
-
-The Gradle wrapper is checked in. You only need a JDK 17 or 21 — Gradle itself is downloaded on first run.
+### Linux/macOS
 
 ```sh
-export JAVA_HOME=/path/to/jdk-21
+export JAVA_HOME=/caminho/para/jdk-21
 ./gradlew assembleDebug
 ```
 
-Output: `app/build/outputs/apk/debug/app-debug.apk`.
+### Windows PowerShell
 
-Pinned to Gradle 9.4.1; tested against Android Studio's bundled JBR 21.
-
-Debug builds install side-by-side with release (`applicationId` suffix `.debug`).
-
-### Release signing
-
-Release builds require a keystore. Create one with `keytool -genkey -v -keystore release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias screencast` and then either:
-
-1. **Local:** create `keystore.properties` at the repo root (gitignored):
-   ```properties
-   storeFile=/absolute/path/to/release.jks
-   storePassword=...
-   keyAlias=screencast
-   keyPassword=...
-   ```
-2. **CI:** set env vars `SCREENCAST_KEYSTORE_FILE`, `SCREENCAST_KEYSTORE_PASSWORD`, `SCREENCAST_KEY_ALIAS`, `SCREENCAST_KEY_PASSWORD`.
-
-Then `./gradlew assembleRelease`. Without credentials `assembleRelease` still runs, but emits `app-release-unsigned.apk` — not installable. Debug builds are unaffected either way.
-
-## Project layout
-
+```powershell
+.\gradlew.bat assembleDebug
 ```
+
+O APK será gerado em:
+
+`app/build/outputs/apk/debug/app-debug.apk`
+
+## Estrutura do projeto
+
+```text
 app/src/main/java/io/github/ddagunts/screencast/
-├── cast/      # Cast V2 protocol (discovery, TLS channel, session FSM)
-├── media/     # HLS mode: screen capture, H.264 encode, HLS muxer, Ktor server
-├── webrtc/    # WebRTC mode: PeerConnection, signaling over custom Cast namespace
-├── androidtv/ # Remote mode: polo pairing + ATV Remote v2 control channel
-├── ui/        # Jetpack Compose UI + ViewModels (one per mode)
-└── util/      # Networking, logging
-app/src/main/proto/   # Vendored polo + remotemessage .proto schemas (spec only — codec is hand-rolled)
-receiver/             # WebRTC custom Cast receiver (static HTML/JS)
+├── cast/       # Descoberta e protocolo Cast V2
+├── media/      # Captura, codificação H.264 e servidor HLS
+├── webrtc/     # PeerConnection e sinalização WebRTC
+├── androidtv/  # Pareamento e controle remoto Android TV
+├── ui/         # Interface Jetpack Compose
+└── util/       # Rede e sistema de logs
+receiver/       # Receiver WebRTC personalizado
 ```
 
-## License
+## Privacidade e segurança
+
+O stream é transmitido somente pela rede local. O HLS usa um token aleatório por sessão e o servidor fica vinculado à interface Wi-Fi do celular. Os logs ficam no armazenamento privado do aplicativo e devem ser revisados antes de serem compartilhados publicamente.
+
+## Aviso
+
+Este projeto não é afiliado à Xiaomi, TCL, Google ou Chromecast. O nome Chromecast é uma marca registrada da Google LLC.
+
+## Licença
 
 Apache-2.0.
