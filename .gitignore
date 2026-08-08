@@ -1,0 +1,29 @@
+# Gradle
+.gradle/
+build/
+
+# Android
+local.properties
+captures/
+artifacts/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+build.sh
+
+# IntelliJ / Android Studio
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Kotlin
+.kotlin/
+
+# Release signing — never commit keystore credentials
+keystore.properties
+*.jks
+*.keystore
+

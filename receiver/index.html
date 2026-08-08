@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>ScreenCast WebRTC receiver</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    html, body {
+      margin: 0; padding: 0; height: 100%; background: #000;
+      color: #fff; font-family: system-ui, sans-serif; overflow: hidden;
+    }
+    #video {
+      width: 100vw; height: 100vh; object-fit: contain; background: #000;
+    }
+    #status {
+      position: fixed; bottom: 16px; left: 16px; right: 16px;
+      text-align: center; opacity: 0.7; font-size: 14px;
+      pointer-events: none;
+    }
+    #status.hidden { display: none; }
+  </style>
+</head>
+<body>
+  <!-- No `muted` attribute: Chromecast's CAF receiver is a trusted context
+       that permits unmuted autoplay. Starting muted would trap us — Chrome's
+       autoplay policy often silently reverts a post-load `video.muted=false`
+       back to true, which is why earlier test casts played video but no
+       audio even though the stream carried both tracks. The ontrack handler
+       still has a muted-fallback for browsers that reject unmuted play. -->
+  <video id="video" autoplay playsinline></video>
+  <div id="status">HTML loaded — waiting for receiver.js…</div>
+  <!-- CAF Receiver framework: the only way to subscribe to a custom Cast
+       namespace from inside the receiver's Chrome instance. Loaded from
+       Google's CDN (the Chromecast fetches this at launch time). -->
+  <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+  <script src="./receiver.js"></script>
+</body>
+</html>

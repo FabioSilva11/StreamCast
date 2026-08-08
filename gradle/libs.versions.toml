@@ -1,0 +1,50 @@
+[versions]
+agp = "9.2.1"
+kotlin = "2.4.0"
+composeBom = "2026.06.00"
+activityCompose = "1.13.0"
+lifecycle = "2.10.0"
+coroutines = "1.11.0"
+ktor = "3.5.0"
+# Community-maintained open-source WebRTC build for Android. Published under
+# BSD-3 from Chromium source tarballs; the AAR bundles libjingle_peerconnection
+# natives for armeabi-v7a, arm64-v8a, x86, x86_64. This is the pragmatic stand-in
+# for "build libwebrtc from Chromium source ourselves" — swap for an in-tree
+# build later without touching any code that references org.webrtc.*.
+webrtcSdk = "125.6422.07"
+junit = "4.13.2"
+robolectric = "4.14.1"
+androidxTestCore = "1.6.1"
+orgJson = "20240303"
+# androidx.security stores the per-app client cert + key for ATV pairing
+# behind a Keystore-derived AES-256-GCM master key.
+securityCrypto = "1.1.0-alpha06"
+# DataStore-Preferences for paired-device metadata (friendly name, model,
+# last-seen MAC). Cert material is in EncryptedFile, not here.
+datastorePreferences = "1.1.1"
+
+[libraries]
+compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+compose-ui = { group = "androidx.compose.ui", name = "ui" }
+compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+ktor-server-core = { group = "io.ktor", name = "ktor-server-core", version.ref = "ktor" }
+ktor-server-cio = { group = "io.ktor", name = "ktor-server-cio", version.ref = "ktor" }
+ktor-server-auto-head-response = { group = "io.ktor", name = "ktor-server-auto-head-response", version.ref = "ktor" }
+ktor-server-cors = { group = "io.ktor", name = "ktor-server-cors", version.ref = "ktor" }
+webrtc-sdk-android = { group = "io.github.webrtc-sdk", name = "android", version.ref = "webrtcSdk" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+androidx-test-core = { group = "androidx.test", name = "core", version.ref = "androidxTestCore" }
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
+androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastorePreferences" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

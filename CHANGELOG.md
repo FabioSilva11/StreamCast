@@ -1,0 +1,485 @@
+# Changelog
+
+All notable changes to ScreenCast are recorded here. Format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
+uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.14.1]
+
+### Changed
+- App icon: scaled down to fit comfortably inside all adaptive-icon mask
+  shapes (circle, squircle, rounded square) and tinted from flat white to
+  subtle lavender (#E4DCFF).
+
+
+## [0.14.0]
+
+### Fixed
+- HLS master playlist (`stream.m3u8`) hardcoded 720p / 3.5 Mbps metadata
+  regardless of the user's actual resolution setting. Now reflects the real
+  `Resolution` (bandwidth, dimensions, AVC level) so hls.js sees correct
+  stream attributes.
+
+### Changed
+- Kotlin 2.3.21 → 2.4.0, Compose BOM 2026.05 → 2026.06, Gradle wrapper
+  9.5.1 → 9.6.0.
+
+
+## [0.11.0]
+
+### Added
+- **Phone-side keyboard for the Remote tab.** Typing into a TV text field
+  (YouTube search, login forms, etc.) no longer requires D-padding across
+  the on-screen keyboard. A Material 3 bottom sheet auto-opens the moment
+  the TV pushes `RemoteImeKeyInject` / `RemoteImeShowRequest` (i.e. when a
+  text field gains focus on the TV) and closes when the user dismisses it.
+  A manual keyboard button on the remote nav row force-opens the sheet
+  against whatever field is already focused, for firmwares that drop the
+  initial focus push.
+  - Wire format: `RemoteImeBatchEdit` (envelope field 21) carrying one
+    `RemoteEditInfo` per keystroke, with monotonic `ime_counter` +
+    per-field `field_counter` echoed back from the TV. The phone diffs the
+    new text against the TV's last-known value with an O(min(len))
+    common-prefix / common-suffix shrink and emits one span replacement
+    per send. Send is debounced 50 ms so a burst of fast typing collapses
+    into one edit per pause. An Enter button injects `KEYCODE_ENTER` so
+    e.g. a YouTube search submits.
+  - Optimistic local update of the mirrored TV text after every send, so
+    subsequent diffs are against the just-sent state instead of the
+    original — keeps the wire payload to one minimal span per keystroke
+    regardless of typing speed.
+  - Sheet is pre-populated from the TV's reported field value + selection
+    so editing-an-existing-string works without a redundant clear.
+
+### Changed
+- `RemoteKeyCode` enum gains `ENTER` (66) for the IME Enter button. Hand-
+  rolled proto codec gains decoders for `RemoteImeKeyInject`,
+  `RemoteImeBatchEdit`, `RemoteImeShowRequest`, plus their nested
+  `RemoteImeObject` / `RemoteEditInfo` / `RemoteTextFieldStatus` /
+  `RemoteAppInfo`.
+
+
+## [0.10.2]
+
+### Fixed
+- WebRTC audio: receiver played video but no audio. Tracked down to the
+  receiver's audio routing path: `audioContext.createMediaStreamSource(stream)`
+  on a WebRTC remote track is a long-standing Chrome bug where the source
+  node attaches but produces no output. The previous 0.10.1 sender-side
+  rewrite confirmed the sender was healthy (`underruns=0` in the diag log),
+  so the silence had to be downstream. Reverted to the pre-0.8.0 receiver
+  pattern: both remote tracks (video + audio) are collected into a single
+  `MediaStream` and assigned to `video.srcObject`; HTMLMediaElement handles
+  audio output reliably on the Chromecast. Removed the Web Audio API
+  routing entirely. Receiver-only change, deploys via GitHub Pages — no
+  APK code touched.
+
+
+## [0.10.1]
+
+### Fixed
+- WebRTC audio: chronic choppiness / total silence resolved. The previous
+  implementation polled `AudioRecord` with `READ_NON_BLOCKING` from inside
+  libwebrtc's exact-10 ms `onBuffer` callback. Because the audio HAL's
+  delivery cadence doesn't line up with libwebrtc's pull clock, the
+  non-blocking read frequently returned a short read and we tail-padded
+  the frame with silence — the user-visible result was a constant stream
+  of 10 ms silence frames interleaved with audio. Replaced with a producer-
+  consumer model: a dedicated `WebRtcAudioCapture-reader` thread does
+  blocking `AudioRecord.read`s into a 5-slot ring (~50 ms slack), and
+  `onBuffer` pops one chunk per call without ever stalling libwebrtc's
+  audio thread. Drop-oldest on ring full (HAL ahead), zero-fill on ring
+  empty (true underrun). New diagnostic log line every ~2 s reports
+  `calls / underruns / drops / ringDepth` so future regressions are
+  visible in the Logs panel.
+- Defensive check after `AudioRecord.startRecording()`: if the state
+  doesn't transition to `RECORDSTATE_RECORDING`, surface a warning
+  instead of silently streaming zeros forever.
+
+
+## [0.10.0]
+
+### Fixed
+- WebRTC mode: cast no longer drops after 5 minutes. CAF (Cast Application
+  Framework) runs a separate idle watchdog that auto-closes the receiver if
+  no media has played through CAF's own media pipeline. WebRTC mode bypasses
+  CAF media entirely (RTCPeerConnection → bare `<video>`, audio through Web
+  Audio API), so CAF saw the receiver as perpetually idle and tore it down
+  at the 5-minute mark. `maxInactivity` only governed the sender-connection
+  heartbeat; the actual fix is `options.disableIdleTimeout = true`. Receiver
+  is hosted on GitHub Pages, so the fix deploys without an APK change.
+
+### Changed
+- AGP 9.2.0 → 9.2.1, Compose BOM 2026.04 → 2026.05, Coroutines 1.10.2 →
+  1.11.0, Ktor 3.4.3 → 3.5.0, Gradle wrapper 9.5.0 → 9.5.1.
+
+
+## [0.9.0]
+
+### Added
+- **Remote control mode** for Android TV / Google TV alongside HLS and
+  WebRTC. The segmented control at the top of the main screen gains a
+  third **Remote** option that discovers TVs on the LAN, pairs with a
+  6-digit code, and exposes D-pad / nav / volume / media-transport — the
+  same role the Google Home app fills.
+  - Pure-Kotlin polo pairing handshake on TLS port 6467 (PAIRING_REQUEST
+    → OPTIONS → CONFIGURATION → SECRET, plus the `SHA-256(clientModulus
+    || clientExponent || serverModulus || serverExponent || nonce)` hash
+    with `Java BigInteger`-style sign-byte stripping). No Cast SDK, no
+    Play Services, no BouncyCastle.
+  - Android TV Remote v2 control channel on port 6466 with mTLS using
+    the per-install RSA-2048 client cert. Auto-replies to the TV's
+    `RemotePingRequest` from inside the read loop so 30-s idle timeouts
+    don't kill the connection.
+  - Per-install client cert + PKCS#8 key persisted in
+    `androidx.security.crypto.EncryptedFile` with a Keystore-derived
+    AES-256-GCM master key. Per-host server-cert SHA-256 pinned in plain
+    `SharedPreferences` (matches the existing Cast V2 pin-store posture).
+  - Self-signed RSA-2048 X.509 v3 cert generated by hand-rolled DER
+    (`AndroidTvCertFactory`) — avoids pulling in BouncyCastle (~1.2 MB)
+    for one cert per app install.
+  - **Settings shortcut maps to long-press Home**, since
+    `KEYCODE_SETTINGS` (176) goes unbound on Sony BRAVIA firmware. Same
+    gesture the physical Sony remote uses to open the Action Menu.
+  - Volume readout in the remote screen mirrors the TV's actual level
+    live, including changes made from the physical remote.
+- Two new screenshots: paired-device picker for the Remote tab, and a
+  second Settings continuation page.
+
+### Changed
+- AGP 9.1.1 → 9.2.0, Kotlin 2.3.20 → 2.3.21, Compose BOM 2026.03 → 2026.04,
+  Ktor 3.4.2 → 3.4.3, Gradle wrapper 9.4.1 → 9.5.0.
+
+
+## [0.8.1]
+
+### Fixed
+- Release APK crashed on WebRTC cast start: libwebrtc's `JNI_OnLoad`
+  abort-crashed because R8 minification renamed the `org.webrtc.*` classes
+  the native library resolves by name. Proguard now keeps every class and
+  interface in `org.webrtc.*`, and explicitly keeps any implementer of
+  `JavaAudioDeviceModule$AudioBufferCallback` / `SamplesReadyCallback`
+  (our `WebRtcAudioCapture.onBuffer` was a JNI target with no visible
+  Java caller). Debug builds were unaffected because minification is off.
+
+
+## [0.8.0]
+
+### Added
+- Unified main Cast screen with a top-of-screen **HLS / WebRTC** toggle. The
+  app remembers the last-used mode across launches; WebRTC is no longer
+  behind an overflow menu.
+- Runtime-configurable WebRTC capture settings in the Settings tab:
+  resolution preset (720p30 / 1080p30 / 1080p60), max bitrate
+  (1 / 2 / 4 / 6 / 8 / 12 Mbps), and an audio on/off toggle. Custom receiver
+  App ID also moved into Settings. All persist across launches; changes
+  apply to the next cast.
+- Volume control in WebRTC mode: receiver-level slider + mute button on the
+  active-cast card, using the same Cast V2 `SET_VOLUME` path HLS already
+  uses. External changes (TV remote, Google Home) reflect back in the UI.
+  Hidden when the receiver reports a fixed-volume control type (e.g. a
+  soundbar that owns volume itself).
+
+### Changed
+- HLS defaults tuned for lower latency: 1080p resolution / 1 s segments /
+  3-segment playlist window / 1.0× live-edge factor (previously
+  720p / 2 s / 6 / 1.5×). Applies only to fresh installs — existing
+  preferences are preserved.
+- WebRTC defaults: 1080p60 / 12 Mbps / audio off (previously
+  1080p30 / 4 Mbps / audio on). Applies only to fresh installs.
+- Settings screen now has HLS and WebRTC sections, separated by a divider.
+- WebRTC audio plays through the Web Audio API on the receiver instead of
+  an `<audio>` element — tighter real-time scheduling, less susceptible to
+  HTMLMediaElement buffering jitter.
+- WebRTC audio pipeline: hardware AEC/NS on the ADM and
+  `googEchoCancellation` / `googAutoGainControl` / `googNoiseSuppression` /
+  `googHighpassFilter` constraints on the audio source are disabled. These
+  are VoIP microphone algorithms that mangle music-playback capture.
+- WebRTC audio: `AudioRecord.read` uses `READ_NON_BLOCKING` so libwebrtc's
+  10 ms audio thread can't stall on source hiccups.
+- WebRTC: separate stream IDs for video (`screen-video`) vs audio
+  (`screen-audio`) so the receiver handles them independently.
+
+### Fixed
+- WebRTC receiver: recreate `RTCPeerConnection` on every new OFFER. The
+  previous module-level singleton was closed on BYE, so consecutive casts
+  silently failed in `setRemoteDescription`.
+- WebRTC receiver: signal-handler failures now surface on the TV status
+  element instead of the invisible Chrome console, plus per-step
+  breadcrumbs through `setRemoteDescription` / `createAnswer` /
+  `setLocalDescription`.
+- WebRTC ICE connectivity: restrict candidate gathering to non-VPN Wi-Fi
+  (`networkIgnoreMask`) and pin the process to the real Wi-Fi Network via
+  `ConnectivityManager.bindProcessToNetwork`. Fixes always-on DNS-filter
+  VPNs (Rethink, NextDNS, etc.) where UDP was leaking onto the tunnel
+  interface and ICE timed out in 15 s.
+
+
+## [0.7.2]
+
+### Changed
+- WebRTC receiver: signal-handler try/catch now surfaces failures onto the
+  on-screen `#status` element instead of only logging to the (invisible)
+  Chromecast Chrome console. When `setRemoteDescription` /
+  `createAnswer` / `setLocalDescription` / `sendSignal` throws, the TV
+  shows `signal OFFER failed: <ErrorName>: <message>`. Also replaced the
+  single `Negotiating…` status with per-step breadcrumbs so we can see
+  which WebRTC call stalls. No Android APK changes — diagnostic
+  scaffolding for an audio-ANSWER regression seen in 0.7.1.
+
+
+## [0.7.1]
+
+### Fixed
+- WebRTC mode: audio reaches the Chromecast correctly now. In 0.7.0 the
+  receiver `<video>` element carried the HTML `muted` attribute; Chrome's
+  autoplay policy committed to the muted state on load and silently
+  reverted our later `video.muted = false`. Sender-side audio was fine
+  all along. Dropping the attribute lets CAF's trusted receiver context
+  autoplay unmuted.
+
+### Changed
+- WebRTC mode: rate-limited diagnostic log in `WebRtcAudioCapture.onBuffer`
+  (every ~2 s) reporting callback rate and sample-signatures before/after
+  our write. Confirms the audio pipeline is flowing and provides a quick
+  signal if playback capture ever stalls.
+
+
+## [0.7.0]
+
+### Added
+- WebRTC mode: audio streaming. Captures device playback
+  (`USAGE_MEDIA` + `USAGE_GAME`) via the same `MediaProjection`
+  that drives video, so no second consent prompt. Fed into
+  libwebrtc through a `JavaAudioDeviceModule` with a custom
+  `AudioBufferCallback` that supplies 48 kHz stereo PCM on
+  demand. If `RECORD_AUDIO` isn't granted, the track stays
+  but plays silence. Receiver unmutes the `<video>` element
+  on incoming track; falls back to muted-only video if
+  autoplay-with-sound is blocked.
+
+### Changed
+- WebRTC mode: video bumped from 720p to 1080p, explicit
+  8 Mbps bitrate ceiling on the `RtpSender`, and
+  `degradationPreference = MAINTAIN_RESOLUTION` so CPU
+  pressure drops framerate instead of resolution (text and
+  UI stay sharp).
+
+
+## [0.6.1]
+
+### Changed
+- WebRTC receiver: added on-screen breadcrumbs through CAF initialization and
+  global `window.error` / `unhandledrejection` handlers that surface any JS
+  failure directly onto the status bar. Intended as diagnostic scaffolding
+  for the `CAST_INIT_TIMEOUT` issue where the receiver page loads but the
+  Cast platform never completes its handshake with CAF. `index.html`'s
+  default status text is now distinct from the "live" text so a stuck
+  HTML-only render is visible at a glance. Also swapped
+  `options.customNamespaces = Object.create(null)` for a regular `{}` —
+  some CAF code paths expect `Object.prototype` methods on that map.
+
+
+## [0.6.0]
+
+### Added
+- WebRTC mode — low-latency (sub-second) screen mirroring alongside the
+  existing HLS path, reachable from the overflow menu on the Cast screen.
+  Uses a custom Cast receiver; ships with a default App ID (`9098830C`)
+  pointing at the project's hosted receiver, so it works with zero setup.
+  Users who prefer to host their own receiver can register a URL at
+  cast.google.com and paste the resulting 8-character App ID in the
+  WebRTC screen to override. Single Chromecast per WebRTC cast; no
+  pause/play/seek or volume controls (WebRTC has no media transport
+  concept).
+
+### Changed
+- Renamed "Phase 1 / Phase 2" terminology to "HLS mode / WebRTC mode"
+  across the README, receiver docs, UI labels, and code comments.
+
+
+## [0.5.4]
+
+### Changed
+- Change default sync settings
+
+
+## [0.5.3]
+
+### Changed
+- Sync settings are now dropdowns instead of sliders. Slider
+  precision was a poor fit for "pick a cadence" / "pick a
+  tolerance" — every other value was indistinguishable from the
+  ones around it. New option lists: interval {5, 10, 15, 20, 25,
+  30, 45, 60, 120, 300} s; threshold {15, 20, 25, 30, 45, 60, 90}
+  ms. Default values bumped to 30 s interval / 20 ms threshold,
+  both of which land in the middle of each list. Sync start is
+  now ON by default since most real multi-receiver setups want
+  alignment anyway — users who don't can still disable it.
+
+## [0.5.2]
+
+### Fixed
+- HTTP server binding to the wrong interface when a VPN is active.
+  Some VPN clients (e.g. Rethink/bravedns) publish a dual-transport
+  network with `Transports: WIFI|VPN` whose first IPv4 LinkAddress
+  is the tunnel endpoint (10.x). `NetworkUtils.getWifiIpAddress`
+  filtered only by `TRANSPORT_WIFI`, so we'd bind the Ktor server
+  to the VPN IP and tell the Chromecast to fetch from an address it
+  couldn't route to — casting would LAUNCH but never LOAD. Fix:
+  also require `NET_CAPABILITY_NOT_VPN`, which excludes those mirror
+  networks and lands us on the real wlan0.
+
+## [0.5.1]
+
+### Added
+- Heartbeat liveness check. `CastSession` now tracks the timestamp
+  of the most recent receiver-originated heartbeat traffic
+  (PONG replies and receiver-initiated PINGs) and declares the
+  session dead after 15 s of silence. Catches TCP half-open states
+  where `send()` keeps succeeding but the Chromecast is gone —
+  previously the session would sit in CASTING forever.
+- "Paired devices" section in Settings. Lists every host with a
+  TOFU-pinned TLS fingerprint and exposes a Forget button per row
+  so a replaced or factory-reset Chromecast can be re-pinned on
+  the next successful handshake. `CastCertPinStore` grew
+  `pinnedHosts()` and `forget(host)` to back it.
+- Unit + Robolectric test suite. 51 tests covering the Cast V2
+  protobuf codec, JSON message builders, `StreamConfig` derived
+  fields, `HlsSegmenter` playlist format, `StreamConfigStore`
+  roundtrip (including the legacy `fine_volume_step` stripper),
+  and `CastCertPinStore` (pin / get / forget / `pinnedHosts`).
+  Runs via `./gradlew :app:testDebugUnitTest`.
+
+## [0.5.0]
+
+### Added
+- Multi-device casting. Up to 4 Chromecasts can subscribe to the same
+  HLS stream in parallel; each receiver has its own Cast V2 session
+  with independent transport controls and volume. The capture
+  pipeline is started once on the first device and reused for the
+  rest, so adding a second receiver doesn't retrigger the
+  `MediaProjection` consent dialog. An explicit "Stop all" ends every
+  cast, and per-device Stop buttons leave the others running.
+- Cross-receiver sync. A new "Sync start" Settings toggle pauses any
+  running casts when a new device joins, waits for the new session to
+  reach ready state, coordinates a `SEEK` across all sessions to the
+  same offset (with `resumeState=PLAYBACK_PAUSE`), and then fires
+  `PLAY` on every receiver in parallel.
+- Continuous sync maintenance. While Sync start is enabled, a
+  background loop in `CastForegroundService` periodically polls each
+  receiver's `currentTime`, pauses every session, seeks them all to
+  the laggard's offset, and resumes playback in parallel. The check
+  interval (default 15 s) and drift threshold (default 15 ms) are
+  exposed as Settings sliders and can be tuned live via
+  `ACTION_UPDATE_SYNC_CONFIG` without ending the cast.
+- Per-receiver "Fine" volume toggle. The 1%-step fine adjustment used
+  to be a global preference; now each active device card has its own
+  toggle so you can fine-trim one receiver while leaving coarser
+  ±5% control on the others.
+
+## [0.4.3]
+
+### Added
+- Screen wake lock held by `CastForegroundService` for the lifetime
+  of a cast session. The phone no longer sleeps mid-cast, so
+  `MediaProjection` keeps feeding frames while the phone is set
+  down. `SCREEN_DIM_WAKE_LOCK` so the user's brightness preference
+  is respected; released in `teardown()`.
+- Fine-grained volume adjustment option. A "Fine" toggle in the
+  volume card swaps the ± step from 5% to 1%. Persisted via
+  `StreamConfigStore` alongside the other stream prefs.
+
+### Fixed
+- Theme recomposition on runtime dark-mode toggle. The dynamic
+  color scheme was reading `LocalContext.current.resources.configuration`,
+  which Compose's `LocalContextConfigurationRead` lint rule flags —
+  `LocalContext` reads don't invalidate on configuration changes, so
+  the color scheme could go stale until the Activity restarted.
+  Switched to `LocalConfiguration.current.uiMode`. CI lint now passes.
+
+## [0.4.1]
+
+### Added
+- README now renders the F-Droid phone screenshots (device list,
+  settings, and a live cast) from
+  `fastlane/metadata/android/en-US/images/phoneScreenshots/`, so
+  GitHub visitors get the same visual tour F-Droid does.
+
+## [0.4.0]
+
+### Changed
+- Material 3 UI refresh. The three-tab `PrimaryTabRow` layout collapses
+  into a single Cast surface with a `TopAppBar`; Settings moves behind
+  a gear `IconButton` and Logs behind an overflow menu, each with an
+  `ArrowBack` nav icon to return. Dynamic color (Material You) applies
+  on Android 12+, falling back to `darkColorScheme()` on older devices.
+  The Cast screen now uses `ElevatedCard` + `AssistChip` for status
+  (with a colored dot mirroring Live / Paused / Buffering / Error),
+  `FilledIconButton` / `FilledTonalIconButton` for transport, and a
+  `ListItem` device picker with `Cast`/`CastConnected` glyphs.
+  The volume control is a ±5 % button pair (`FilledTonalIconButton`
+  with `Add`/`Remove` glyphs) flanking a large percent readout — the
+  earlier draggable `Slider` tended to move in visible steps rather
+  than tracking the finger, and discrete taps match the Chromecast's
+  native 5 % increment. `Copy URL` and `Copy logs` stay as textual
+  `TextButton`s. Settings wraps each slider in its own `SettingCard`.
+- Pulled in `androidx.compose.material:material-icons-extended` for
+  glyphs missing from icons-core (`Pause`, `Stop`, `ContentCopy`,
+  `Cast`, `CastConnected`, `VolumeUp`/`VolumeOff`). R8 strips unused
+  icons from release builds.
+
+### Added
+- Transport controls over the Cast V2 `media` namespace: Play / Pause
+  buttons in the control screen and on the ongoing notification. The
+  phone reflects the receiver's `playerState` (PLAYING / PAUSED /
+  BUFFERING / IDLE) as the source of truth — we never optimistically
+  flip local state on a button press.
+- Volume and mute controls over the Cast V2 `receiver` namespace. The
+  slider drives the TV in real time via a conflated channel throttled
+  to ~10 Hz, with a guaranteed final send on release so the TV lands
+  on the exact finger-up position. Unsolicited `RECEIVER_STATUS`
+  echoes snap the UI back to the device state when no drag is in
+  progress.
+- `CastVolume` model surfacing `controlType` — sliders disable
+  themselves when the receiver reports `"fixed"` (e.g. some soundbars
+  and audio extractors that own volume independently).
+- `CONTROLS.md` — implementation plan for phone-as-remote support,
+  including the distinction between Cast V2 (transport + volume on
+  port 8009) and the separate Android TV Remote Service v2 (D-pad,
+  Home, Back on ports 6466/6467 with its own pairing flow) so future
+  work on the D-pad remote starts from the right premise.
+
+### Security
+- Added `res/xml/network_security_config.xml` wired via
+  `AndroidManifest.xml`. Defense-in-depth that asserts the app's
+  network posture: `cleartextTrafficPermitted="false"` and an empty
+  `<trust-anchors/>` make any accidental outbound HTTP(S) via
+  `HttpURLConnection` / `OkHttp` / `WebView` fail loudly.
+  - Unaffected and intentional: the TLS connection to the Chromecast
+    on port 8009 (uses its own scoped `SSLContext` + TOFU fingerprint
+    pin store), mDNS discovery over UDP multicast, and the inbound
+    Ktor HLS server (NSC does not govern `ServerSocket`s).
+
+[0.14.1]: https://github.com/ddagunts/ScreenCast/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/ddagunts/ScreenCast/compare/v0.13.1...v0.14.0
+[0.11.0]: https://github.com/ddagunts/ScreenCast/compare/v0.10.2...v0.11.0
+[0.10.2]: https://github.com/ddagunts/ScreenCast/compare/v0.10.1...v0.10.2
+[0.10.1]: https://github.com/ddagunts/ScreenCast/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/ddagunts/ScreenCast/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/ddagunts/ScreenCast/compare/v0.8.1...v0.9.0
+[0.8.1]: https://github.com/ddagunts/ScreenCast/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/ddagunts/ScreenCast/compare/v0.7.2...v0.8.0
+[0.7.2]: https://github.com/ddagunts/ScreenCast/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/ddagunts/ScreenCast/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/ddagunts/ScreenCast/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/ddagunts/ScreenCast/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/ddagunts/ScreenCast/compare/v0.5.4...v0.6.0
+[0.5.4]: https://github.com/ddagunts/ScreenCast/compare/v0.5.3...v0.5.4
+[0.5.3]: https://github.com/ddagunts/ScreenCast/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/ddagunts/ScreenCast/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/ddagunts/ScreenCast/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/ddagunts/ScreenCast/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/ddagunts/ScreenCast/compare/v0.4.1...v0.4.3
+[0.4.1]: https://github.com/ddagunts/ScreenCast/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/ddagunts/ScreenCast/compare/v0.3...v0.4.0
